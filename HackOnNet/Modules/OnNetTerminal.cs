@@ -1,8 +1,10 @@
 ﻿using Hacknet;
 using HackOnNet.GUI;
+using HackOnNet.Modules.Tabs;
 using HackOnNet.Screens;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,17 +17,26 @@ namespace HackOnNet.Modules
     {
         public static float PROMPT_OFFSET = 0f;
 
-        private System.Collections.Generic.List<string> history;
+        public Tab LocalhostTab;
+        public Tab ActiveTab;
+        public List<Tab> TabList = new List<Tab>();
+        public List<Tab> BottomTabList {
+            get
+            {
+                return TabList.Where(x => x.IsBottom).ToList();
+            }
+        }
+        public List<Tab> TopTabList
+        {
+            get
+            {
+                return TabList.Where(x => !x.IsBottom).ToList();
+            }
+        }
 
-        private System.Collections.Generic.List<string> runCommands = new System.Collections.Generic.List<string>();
-
-        private int commandHistoryOffset;
-
-        public string currentLine;
-
-        public string lastRunCommand;
-
-        public string prompt;
+        public Tab FullTab;
+        public Tab BottomTab;
+        public Tab TopTab;
 
         public bool usingTabExecution = false;
 
@@ -43,45 +54,72 @@ namespace HackOnNet.Modules
 
         public OnNetTerminal(Rectangle location, UserScreen screen) : base(location, screen)
 		{
-            this.history = new System.Collections.Generic.List<string>(512);
-            this.prompt = "";
-            this.currentLine = "";
             Hacknet.Gui.TextBox.cursorPosition = 0;
             Hacknet.Gui.TextBox.textDrawOffsetPosition = 0;
         }
 
         public override void LoadContent()
         {
-            this.history = new System.Collections.Generic.List<string>(512);
-            this.runCommands = new System.Collections.Generic.List<string>(512);
-            this.commandHistoryOffset = 0;
-            this.currentLine = "";
-            this.lastRunCommand = "";
-            this.prompt = "{{blue}}"+userScreen.username+ "{{white}}$ ";
-            Hacknet.GuiData.getFilteredKeys();
+            LocalhostTab = new Tab(this, "localhost", userScreen.username);
+            var TestTab = new Tab(this, "2.2.2.2", userScreen.username);
+            ActiveTab = LocalhostTab;
+            FullTab = ActiveTab;
+            BottomTab = FullTab;
+            TabList.Add(ActiveTab);
+            TabList.Add(TestTab);
+            MoveTab(TestTab, TOP, true);
+        }
+
+        public bool IsSplitTerminal()
+        {
+            bool hasBottom = false;
+            bool hasTop = false;
+            foreach(Tab tab in TabList)
+            {
+                if (tab.IsBottom)
+                    hasBottom = true;
+                else
+                    hasTop = true;
+            }
+            return hasTop == hasBottom;
         }
 
         public override void Update(float t)
         {
         }
 
-        public override void Draw(float t)
+        public void DrawFullTerminal(float t)
         {
-            base.Draw(t);
+            var tmpRect = this.bounds;
+            tmpRect.Y = tmpRect.Y - Module.PANEL_HEIGHT;
+            tmpRect.Height = tmpRect.Height + Module.PANEL_HEIGHT;
+            this.spriteBatch.Draw(Utils.white, tmpRect, this.userScreen.moduleColorBacking);
+            Hacknet.Gui.RenderedRectangle.doRectangleOutline(tmpRect.X, tmpRect.Y, tmpRect.Width, tmpRect.Height, 1, new Color?(this.userScreen.moduleColorSolid));
+            tmpRect.Height = Module.PANEL_HEIGHT;
+            this.spriteBatch.Draw(Utils.white, tmpRect, this.userScreen.moduleColorStrong);
+            this.spriteBatch.DrawString(GuiData.detailfont, "TERMINAL - " + FullTab.target + " ; Tab " + (TabList.IndexOf(FullTab)+1) + "/" + TabList.Count, new Vector2((float)(tmpRect.X + 2), (float)(tmpRect.Y + 2)), this.userScreen.semiTransText);
+            tmpRect = this.bounds;
+            tmpRect.Y = tmpRect.Y - Module.PANEL_HEIGHT;
+            tmpRect.Height = tmpRect.Height + Module.PANEL_HEIGHT;
+            Hacknet.Gui.RenderedRectangle.doRectangleOutline(tmpRect.X, tmpRect.Y, tmpRect.Width, tmpRect.Height, 1, new Color?(this.userScreen.moduleColorSolid));
+
             float tinyFontCharHeight = GuiData.ActiveFontConfig.tinyFontCharHeight;
             this.spriteBatch.Draw(Utils.white, this.bounds, this.userScreen.displayModuleExtraLayerBackingColor);
+
             int num = (int)((float)(this.bounds.Height - 12) / (tinyFontCharHeight + 1f));
             num -= 3;
-            num = System.Math.Min(num, this.history.Count);
+            num = System.Math.Min(num, FullTab.history.Count);
             Vector2 input = new Vector2((float)(this.bounds.X + 4), (float)(this.bounds.Y + this.bounds.Height) - tinyFontCharHeight * 5f);
             if (num > 0)
             {
-                for (int i = this.history.Count; i > this.history.Count - num; i--)
+                for (int i = FullTab.history.Count; i > FullTab.history.Count - num; i--)
                 {
                     try
                     {
-                        this.spriteBatch.DrawFormatString(this.history[i - 1], Utils.ClipVec2ForTextRendering(input));
+                        this.spriteBatch.DrawFormatString(FullTab.history[i - 1], Utils.ClipVec2ForTextRendering(input));
                         input.Y -= tinyFontCharHeight + 1f;
+                        if (input.Y < tmpRect.Y + 20)
+                            break;
                     }
                     catch (System.Exception ex)
                     {
@@ -89,304 +127,220 @@ namespace HackOnNet.Modules
                     }
                 }
             }
-            this.doGui();
+            FullTab.doGui(bounds, true);
         }
 
-        public void executeLine()
-        {
-            string text = this.currentLine;
-            if (Hacknet.Gui.TextBox.MaskingText)
-            {
-                text = "";
-                for (int i = 0; i < this.currentLine.Length; i++)
-                {
-                    text += "*";
-                }
-            }
-            this.history.Add(this.prompt + text);
-            this.lastRunCommand = this.currentLine;
-            this.runCommands.Add(this.currentLine);
-            /*if (!this.preventingExecution)
-            {
-                this.commandHistoryOffset = 0;
-                this.os.execute(this.currentLine);
-                if (this.currentLine.Length > 0)
-                {
-                    StatsManager.IncrementStat("commands_run", 1);
-                }
-            }*/
-            this.userScreen.Execute(this.currentLine);
-            this.currentLine = "";
-            Hacknet.Gui.TextBox.cursorPosition = 0;
-            Hacknet.Gui.TextBox.textDrawOffsetPosition = 0;
-            this.executionPreventionIsInteruptable = false;
-        }
 
-        public string GetRecentTerminalHistoryString()
-        {
-            string text = "";
-            int num = this.history.Count - 1;
-            while (num > this.history.Count - 30 && this.history.Count > num)
-            {
-                text = text + this.history[num] + "\r\n";
-                num--;
-            }
-            return text;
-        }
+        public static bool BOTTOM = true;
+        public static bool TOP = false;
 
-        public System.Collections.Generic.List<string> GetRecentTerminalHistoryList()
+        public void MoveTab(Tab tab, bool direction, bool changeActive)
         {
-            System.Collections.Generic.List<string> list = new System.Collections.Generic.List<string>();
-            int num = 0;
-            while (num < 30 && num < this.history.Count)
+            if(direction == BOTTOM)
             {
-                list.Add(this.history[num]);
-                num++;
-            }
-            return list;
-        }
-
-        public void NonThreadedInstantExecuteLine()
-        {
-            /*string text = this.currentLine;
-            if (Hacknet.Gui.TextBox.MaskingText)
-            {
-                text = "";
-                for (int i = 0; i < this.currentLine.Length; i++)
+                if(!tab.IsBottom)
                 {
-                    text += "*";
-                }
-            }
-            this.history.Add(this.prompt + text);
-            this.lastRunCommand = this.currentLine;
-            this.runCommands.Add(this.currentLine);
-            if (!this.preventingExecution)
-            {
-                this.commandHistoryOffset = 0;
-                ProgramRunner.ExecuteProgram(this.os, this.currentLine.Split(new char[]
-                {
-                    ' '
-                }));
-            }
-            this.currentLine = "";
-            Hacknet.Gui.TextBox.cursorPosition = 0;
-            Hacknet.Gui.TextBox.textDrawOffsetPosition = 0;
-            this.executionPreventionIsInteruptable = false;*/
-        }
-
-        public void doGui()
-        {
-            SpriteFont tinyfont = GuiData.tinyfont;
-            float tinyFontCharHeight = GuiData.ActiveFontConfig.tinyFontCharHeight;
-            int num = -4;
-            int num2 = (int)((float)(this.bounds.Y + this.bounds.Height - 16) - tinyFontCharHeight - (float)num);
-            int i = (int)tinyfont.MeasureString(this.prompt.RemoveFormatting()).X;
-            if (this.bounds.Width > 0)
-            {
-                while (i >= (int)((double)this.bounds.Width * 0.7))
-                {
-                    this.prompt = this.prompt.Substring(1);
-                    i = (int)tinyfont.MeasureString(this.prompt.RemoveFormatting()).X;
-                }
-            }
-            this.spriteBatch.DrawFormatString(this.prompt, new Vector2((float)(this.bounds.X + 3), (float)num2));
-            if (Hacknet.Localization.LocaleActivator.ActiveLocaleIsCJK())
-            {
-                num -= 4;
-            }
-            num2 += num;
-            if (/*this.userScreen.inputEnabled*/true)
-            {
-                if (!this.inputLocked)
-                {
-                    Hacknet.Gui.TextBox.LINE_HEIGHT = (int)(tinyFontCharHeight + 15f);
-                    this.currentLine = Hacknet.Gui.TextBox.doTerminalTextField(7001, this.bounds.X + 3 + (int)Terminal.PROMPT_OFFSET + (int)tinyfont.MeasureString(this.prompt.RemoveFormatting()).X, num2, this.bounds.Width - i - 4, this.bounds.Height, 1, this.currentLine, tinyfont);
-                    if (Hacknet.Gui.TextBox.BoxWasActivated)
-                    {
-                        this.executeLine();
-                    }
-                    if (Hacknet.Gui.TextBox.UpWasPresed)
-                    {
-                        if (this.runCommands.Count > 0)
-                        {
-                            this.commandHistoryOffset++;
-                            if (this.commandHistoryOffset > this.runCommands.Count)
-                            {
-                                this.commandHistoryOffset = this.runCommands.Count;
-                            }
-                            this.currentLine = this.runCommands[this.runCommands.Count - this.commandHistoryOffset];
-                            Hacknet.Gui.TextBox.cursorPosition = this.currentLine.Length;
-                        }
-                    }
-                    if (Hacknet.Gui.TextBox.DownWasPresed)
-                    {
-                        if (this.commandHistoryOffset > 0)
-                        {
-                            this.commandHistoryOffset--;
-                            if (this.commandHistoryOffset < 0)
-                            {
-                                this.commandHistoryOffset = 0;
-                            }
-                            if (this.commandHistoryOffset <= 0)
-                            {
-                                this.currentLine = "";
-                            }
-                            else
-                            {
-                                this.currentLine = this.runCommands[this.runCommands.Count - this.commandHistoryOffset];
-                            }
-                            Hacknet.Gui.TextBox.cursorPosition = this.currentLine.Length;
-                        }
-                    }
-                    if (Hacknet.Gui.TextBox.TabWasPresed)
-                    {
-                        if (this.usingTabExecution)
-                        {
-                            this.executeLine();
-                        }
-                        else
-                        {
-                            this.doTabComplete();
-                        }
-                    }
-                }
-            }
-        }
-
-        public void doTabComplete()
-        {
-            /*System.Collections.Generic.List<string> list = new System.Collections.Generic.List<string>();
-            if (this.currentLine.Length != 0)
-            {
-                int num = this.currentLine.IndexOf(' ');
-                if (num >= 1)
-                {
-                    string text = this.currentLine.Substring(num + 1);
-                    string text2 = this.currentLine.Substring(0, num);
-                    if (text2.Equals("upload") || text2.Equals("up"))
-                    {
-                        int num2 = text.LastIndexOf('/');
-                        if (num2 < 0)
-                        {
-                            num2 = 0;
-                        }
-                        string text3 = text.Substring(0, num2) + "/";
-                        if (text3.StartsWith("/"))
-                        {
-                            text3 = text3.Substring(1);
-                        }
-                        string text4 = text.Substring(num2 + ((num2 == 0) ? 0 : 1));
-                        Folder folder = Programs.getFolderAtPathAsFarAsPossible(text, this.os, this.os.thisComputer.files.root);
-                        bool flag = false;
-                        if (folder == this.os.thisComputer.files.root && text3.Length > 1)
-                        {
-                            flag = true;
-                        }
-                        if (folder == null)
-                        {
-                            folder = this.os.thisComputer.files.root;
-                        }
-                        if (!flag)
-                        {
-                            for (int i = 0; i < folder.folders.Count; i++)
-                            {
-                                if (folder.folders[i].name.ToLower().StartsWith(text4.ToLower(), System.StringComparison.InvariantCultureIgnoreCase))
-                                {
-                                    list.Add(string.Concat(new string[]
-                                    {
-                                        text2,
-                                        " ",
-                                        text3,
-                                        folder.folders[i].name,
-                                        "/"
-                                    }));
-                                }
-                            }
-                            for (int i = 0; i < folder.files.Count; i++)
-                            {
-                                if (folder.files[i].name.ToLower().StartsWith(text4.ToLower()))
-                                {
-                                    list.Add(text2 + " " + text3 + folder.files[i].name);
-                                }
-                            }
-                        }
-                    }
+                    var idx = TopTabList.IndexOf(tab);
+                    var nextTab = TopTabList[(idx == -1 ? 0 : ((idx + 1) % TopTabList.Count))];
+                    if (nextTab == tab)
+                        TopTab = null;
                     else
-                    {
-                        if (text == null || ((text.Equals("") || text.Length < 1) && !text2.Equals("exe")))
-                        {
-                            return;
-                        }
-                        Folder folder = Programs.getCurrentFolder(this.os);
-                        for (int i = 0; i < folder.folders.Count; i++)
-                        {
-                            if (folder.folders[i].name.StartsWith(text, System.StringComparison.InvariantCultureIgnoreCase))
-                            {
-                                list.Add(text2 + " " + folder.folders[i].name + "/");
-                            }
-                        }
-                        for (int i = 0; i < folder.files.Count; i++)
-                        {
-                            if (folder.files[i].name.StartsWith(text, System.StringComparison.InvariantCultureIgnoreCase))
-                            {
-                                list.Add(text2 + " " + folder.files[i].name);
-                            }
-                        }
-                        if (list.Count == 0)
-                        {
-                            for (int i = 0; i < folder.files.Count; i++)
-                            {
-                                if (folder.files[i].name.StartsWith(text, System.StringComparison.InvariantCultureIgnoreCase))
-                                {
-                                    list.Add(text2 + " " + folder.files[i].name);
-                                }
-                            }
-                        }
-                    }
+                        TopTab = nextTab;
+                    tab.isBottom = true;
+                    ActiveTab = tab;
+                    BottomTab = tab;
                 }
-                else
+            }
+            else if(direction == TOP)
+            {
+                if(tab.IsBottom)
                 {
-                    System.Collections.Generic.List<string> list2 = new System.Collections.Generic.List<string>();
-                    list2.AddRange(ProgramList.programs);
-                    list2.AddRange(ProgramList.getExeList(this.os));
-                    for (int i = 0; i < list2.Count; i++)
-                    {
-                        if (list2[i].ToLower().StartsWith(this.currentLine.ToLower()))
-                        {
-                            list.Add(list2[i]);
-                        }
-                    }
+                    var idx = BottomTabList.IndexOf(tab);
+                    var nextTab = BottomTabList[(idx == -1 ? 0 : ((idx + 1) % BottomTabList.Count))];
+                    if (nextTab == tab)
+                        BottomTab = null;
+                    else
+                        BottomTab = nextTab;
+                    ActiveTab = tab;
+                    tab.isBottom = false;
+                    TopTab = tab;
                 }
-                if (list.Count == 1)
-                {
-                    this.currentLine = list[0];
-                    Hacknet.Gui.TextBox.moveCursorToEnd(this.currentLine);
-                }
-                else if (list.Count > 1)
-                {
-                    this.os.write(this.prompt + this.currentLine);
-                    string text5 = list[0];
-                    for (int i = 0; i < list.Count; i++)
-                    {
-                        this.os.write(list[i]);
-                        for (int j = 0; j < text5.Length; j++)
-                        {
-                            if (list[i].Length <= j || string.Concat(text5[j]).ToLowerInvariant()[0] != string.Concat(list[i][j]).ToLowerInvariant()[0])
-                            {
-                                text5 = text5.Substring(0, j);
-                                break;
-                            }
-                        }
-                        this.currentLine = text5;
-                        Hacknet.Gui.TextBox.moveCursorToEnd(this.currentLine);
-                    }
-                }
-            }*/
+            }
         }
+
+        public void DrawTopTerminal(float t)
+        {
+            var tmpRect = this.bounds;
+            tmpRect.Height /= 2;
+            tmpRect.Height -= 15;
+            tmpRect.Y = tmpRect.Y - Module.PANEL_HEIGHT;
+            tmpRect.Height = tmpRect.Height + Module.PANEL_HEIGHT;
+            this.spriteBatch.Draw(Utils.white, tmpRect, this.userScreen.moduleColorBacking);
+            Hacknet.Gui.RenderedRectangle.doRectangleOutline(tmpRect.X, tmpRect.Y, tmpRect.Width, tmpRect.Height, 1, new Color?(this.userScreen.moduleColorSolid));
+            tmpRect.Height = Module.PANEL_HEIGHT;
+            this.spriteBatch.Draw(Utils.white, tmpRect , 
+                Color.Lerp(this.userScreen.moduleColorStrong, Color.LightBlue,
+                (TopTab == ActiveTab ? 0.1f : 0f)));
+            this.spriteBatch.DrawString(GuiData.detailfont, (TopTab == ActiveTab ? "[ACTIVE] " : "") + "TERMINAL - " + TopTab.target + " ; Tab " + (TopTabList.IndexOf(TopTab) + 1) + "/" + TopTabList.Count, new Vector2((float)(tmpRect.X + 2), (float)(tmpRect.Y + 2)), this.userScreen.semiTransText);
+            tmpRect = this.bounds;
+            tmpRect.Height /= 2;
+            tmpRect.Height -= 15;
+            tmpRect.Y = tmpRect.Y - Module.PANEL_HEIGHT;
+            tmpRect.Height = tmpRect.Height + Module.PANEL_HEIGHT;
+            Hacknet.Gui.RenderedRectangle.doRectangleOutline(tmpRect.X, tmpRect.Y, tmpRect.Width, tmpRect.Height, 1, 
+                Color.Lerp(this.userScreen.moduleColorSolid, Color.LightBlue,
+                (TopTab == ActiveTab ? 0.45f : 0f)));
+
+            float tinyFontCharHeight = GuiData.ActiveFontConfig.tinyFontCharHeight;
+            this.spriteBatch.Draw(Utils.white, tmpRect, this.userScreen.displayModuleExtraLayerBackingColor);
+
+            int num = (int)((float)(this.bounds.Height - 12) / (tinyFontCharHeight + 1f));
+            num -= 3;
+            num = System.Math.Min(num, TopTab.history.Count);
+            Vector2 input = new Vector2((float)(tmpRect.X + 4), (float)(tmpRect.Y + tmpRect.Height) - tinyFontCharHeight * 5f);
+            if (num > 0)
+            {
+                for (int i = TopTab.history.Count; i > TopTab.history.Count - num; i--)
+                {
+                    try
+                    {
+                        this.spriteBatch.DrawFormatString(TopTab.history[i - 1], Utils.ClipVec2ForTextRendering(input));
+                        input.Y -= tinyFontCharHeight + 1f;
+                        if (input.Y < tmpRect.Y + 20)
+                            break;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Console.WriteLine(ex.ToString());
+                    }
+                }
+            }
+            TopTab.doGui(tmpRect, ActiveTab == TopTab);
+        }
+
+        public void DrawBottomTerminal(float t)
+        {
+            var tmpRect = this.bounds;
+            tmpRect.Height /= 2;
+            tmpRect.Y += tmpRect.Height;
+            tmpRect.Y = tmpRect.Y - Module.PANEL_HEIGHT;
+            tmpRect.Height = tmpRect.Height + Module.PANEL_HEIGHT;
+            this.spriteBatch.Draw(Utils.white, tmpRect, this.userScreen.moduleColorBacking);
+            Hacknet.Gui.RenderedRectangle.doRectangleOutline(tmpRect.X, tmpRect.Y, tmpRect.Width, tmpRect.Height, 1, new Color?(this.userScreen.moduleColorSolid));
+            tmpRect.Height = Module.PANEL_HEIGHT;
+            this.spriteBatch.Draw(Utils.white, tmpRect,
+                Color.Lerp(this.userScreen.moduleColorStrong, Color.LightBlue,
+                (BottomTab == ActiveTab ? 0.1f : 0f)));
+            this.spriteBatch.DrawString(GuiData.detailfont, (BottomTab == ActiveTab ? "[ACTIVE] " : "") + "TERMINAL - " + BottomTab.target + " ; Tab " + (BottomTabList.IndexOf(BottomTab) + 1) + "/" + BottomTabList.Count, new Vector2((float)(tmpRect.X + 2), (float)(tmpRect.Y + 2)), this.userScreen.semiTransText);
+            tmpRect = this.bounds;
+            tmpRect.Height /= 2;
+            tmpRect.Y += tmpRect.Height;
+            tmpRect.Y = tmpRect.Y - Module.PANEL_HEIGHT;
+            tmpRect.Height = tmpRect.Height + Module.PANEL_HEIGHT;
+            Hacknet.Gui.RenderedRectangle.doRectangleOutline(tmpRect.X, tmpRect.Y, tmpRect.Width, tmpRect.Height, 1,
+                Color.Lerp(this.userScreen.moduleColorSolid, Color.LightBlue,
+                (BottomTab == ActiveTab ? 0.45f : 0f)));
+
+            float tinyFontCharHeight = GuiData.ActiveFontConfig.tinyFontCharHeight;
+            this.spriteBatch.Draw(Utils.white, tmpRect, this.userScreen.displayModuleExtraLayerBackingColor);
+
+            int num = (int)((float)(this.bounds.Height - 12) / (tinyFontCharHeight + 1f));
+            num -= 3;
+            num = System.Math.Min(num, BottomTab.history.Count);
+            Vector2 input = new Vector2((float)(this.bounds.X + 4), (float)(this.bounds.Y + this.bounds.Height) - tinyFontCharHeight * 5f);
+            if (num > 0)
+            {
+                for (int i = BottomTab.history.Count; i > BottomTab.history.Count - num; i--)
+                {
+                    try
+                    {
+                        this.spriteBatch.DrawFormatString(BottomTab.history[i - 1], Utils.ClipVec2ForTextRendering(input));
+                        input.Y -= tinyFontCharHeight + 1f;
+                        if (input.Y < tmpRect.Y + 20)
+                            break;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Console.WriteLine(ex.ToString());
+                    }
+                }
+            }
+            BottomTab.doGui(tmpRect, ActiveTab == BottomTab);
+        }
+
+        public void ShiftDisplay(bool forwards)
+        {
+            if(IsSplitTerminal())
+            {
+                var TabList = ActiveTab.IsBottom ? BottomTabList : TopTabList;
+                ActiveTab = TabList[(TabList.IndexOf(ActiveTab) + 1) % TabList.Count];
+                if (ActiveTab.IsBottom)
+                    BottomTab = ActiveTab;
+                else
+                    TopTab = ActiveTab;
+            }
+            else
+            {
+                ActiveTab = TabList[(TabList.IndexOf(ActiveTab) + 1) % TabList.Count];
+                FullTab = ActiveTab;
+            }
+        }
+
+        public bool WasPressed(Keys key)
+        {
+            return Hacknet.GuiData.getKeyboadState().IsKeyDown(key) && Hacknet.GuiData.getLastKeyboadState().IsKeyUp(key);
+        }
+
+        public override void Draw(float t)
+        {
+            if(Hacknet.GuiData.getKeyboadState().IsKeyDown(Microsoft.Xna.Framework.Input.Keys.LeftAlt))
+            {
+                if(WasPressed(Microsoft.Xna.Framework.Input.Keys.Up))
+                {
+                    MoveTab(ActiveTab, TOP, true);
+                }
+                else if (WasPressed(Microsoft.Xna.Framework.Input.Keys.Down))
+                {
+                    MoveTab(ActiveTab, BOTTOM, true);
+                }
+                else if (WasPressed(Microsoft.Xna.Framework.Input.Keys.S))
+                {
+                    if(IsSplitTerminal())
+                    {
+                        if (ActiveTab.IsBottom)
+                            ActiveTab = TopTab;
+                        else
+                            ActiveTab = BottomTab;
+                    }
+                }
+                else if (WasPressed(Microsoft.Xna.Framework.Input.Keys.Right))
+                {
+                    ShiftDisplay(true);
+                }
+                else if(WasPressed(Microsoft.Xna.Framework.Input.Keys.Left))
+                {
+                    ShiftDisplay(false);
+                }
+            }
+            
+
+            if(!IsSplitTerminal())
+            {
+                DrawFullTerminal(t);
+            }
+            else
+            {
+                DrawTopTerminal(t);
+                DrawBottomTerminal(t);
+            }
+            
+        }
+
+        
 
         public void writeLine(string text)
         {
-            text = Utils.SuperSmartTwimForWidth(text, this.bounds.Width - 6, GuiData.tinyfont);
+            /*text = Utils.SuperSmartTwimForWidth(text, this.bounds.Width - 6, GuiData.tinyfont);
             string[] array = text.Split(new char[]
             {
                 '\n'
@@ -394,12 +348,12 @@ namespace HackOnNet.Modules
             for (int i = 0; i < array.Length; i++)
             {
                 this.history.Add(array[i]);
-            }
+            }*/
         }
 
         public void write(string text)
         {
-            if (this.history.Count <= 0 || GuiData.tinyfont.MeasureString(this.history[this.history.Count - 1] + text).X > (float)(this.bounds.Width - 6))
+            /*if (this.history.Count <= 0 || GuiData.tinyfont.MeasureString(this.history[this.history.Count - 1] + text).X > (float)(this.bounds.Width - 6))
             {
                 this.writeLine(text);
             }
@@ -408,30 +362,32 @@ namespace HackOnNet.Modules
                 System.Collections.Generic.List<string> list;
                 int index;
                 (list = this.history)[index = this.history.Count - 1] = list[index] + text;
-            }
+            }*/
         }
 
         public void clearCurrentLine()
         {
-            this.currentLine = "";
+            /*this.currentLine = "";
             Hacknet.Gui.TextBox.cursorPosition = 0;
-            Hacknet.Gui.TextBox.textDrawOffsetPosition = 0;
+            Hacknet.Gui.TextBox.textDrawOffsetPosition = 0;*/
         }
 
         public void reset()
         {
-            this.history.Clear();
-            this.clearCurrentLine();
+            /*this.history.Clear();
+            this.clearCurrentLine();*/
         }
 
         public int commandsRun()
         {
-            return this.runCommands.Count;
+            //return this.runCommands.Count;
+            return 0;
         }
 
         public string getLastRunCommand()
         {
-            return this.lastRunCommand;
+            return "";
+            //return this.lastRunCommand;
         }
     }
 }
